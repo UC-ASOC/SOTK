@@ -1,0 +1,272 @@
+---
+title: "Sptial Omics Toolkit"
+author: Heewon Seo
+date: "`r format(Sys.Date(), '%m/%d/%Y')`"
+abstract: >
+  The Spatial Omics Toolkit (SOTK) is an R package containing a comprehensive set of functions to identify biological modules from spatial transcriptomics profiles. Multiple profiles across different cohorts or platforms can be analyzed by constructing a correlation network with the deconvoluted outputs using the community search algorithm as an integrative method. Additionally, SOTK allows users to select the optimal rank (latent factor) from multiple NMF runs in a data-driven way by identifying the minimum rank that encompasses the majority, if not all, of the communities grouped by community search algorithms. It was initially developed to analyze Nanostring GeoMx Digital Spatial Profiler (DSP) data, and SOTK is particularly well-suited for cases where multiple segments (e.g., cell types) are independently profiled from the same tissue samples, allowing for the incorporation of numerous segment profiles per sample/patient.
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{SOTK}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+## 0. Data preparation
+Users can use either [NMF](https://github.com/renozao/NMF) or [cNMF](https://github.com/dylkot/cNMF) to deconvolute transcriptomics profiles to obtain metagenes/GEPs (gene expression programs).
+
+### Run NMF
+```{r runNMF, eval=FALSE, echo=TRUE}
+# Do not Run
+library(NMF)
+library(Biobase)
+
+## Test data
+data(esGolub)
+esGolub <- esGolub[c(1:200), c(1:20)]
+
+## NMF options
+method <- "brunet"; nr <- 10; seed <- 123456; options <- "tv2p4" # examples
+
+## Run NMF
+nmfRes <- nmf(esGolub, rank = c(2:5), method = method, nrun = nr, seed = seed, .options = options)
+saveRDS(nmfRes, "NMF_rank_2_5.RDS")
+```
+
+### Run NMF independently for each rank and merge them into a single NMF object
+```{r runNMF_parallel, eval=FALSE, echo=TRUE}
+# Do not Run
+library(NMF)
+library(Biobase)
+
+## Test data
+data(esGolub)
+esGolub <- esGolub[c(1:200), c(1:20)]
+
+## NMF options
+method <- "brunet"; nr <- 10; seed <- 123456; options <- "tv2p4" # examples
+
+## Run NMF in parallel
+### on Server A
+res2 <- nmf(esGolub, rank=2, method=method, nrun=nr, seed=seed, .options=options)
+saveRDS(res2, "NMF_rank_2.RDS")
+
+### on Server B
+res3 <- nmf(esGolub, rank=3, method=method, nrun=nr, seed=seed, .options=options)
+saveRDS(res3, "NMF_rank_3.RDS")
+
+### on Server C
+res4 <- nmf(esGolub, rank=4, method=method, nrun=nr, seed=seed, .options=options)
+saveRDS(res4, "NMF_rank_4.RDS")
+
+## User defined function
+combineNMFObj <- function(results) {
+    measures <- compare(results)
+    measures <- measures[,c(5:ncol(measures))]
+    rownames(measures) <- c(1:nrow(measures))
+
+    consensus <- lapply(results, function(res) {
+        cons <- connectivity(res)
+        attr(cons, "model") <- NULL
+        return(cons)
+    })
+
+    fit <- results
+    
+    obj <- list(measures = measures, 
+        		 consensus = consensus, 
+        		 fit = fit)
+    class(obj) <- "NMF.rank"
+
+    return(obj)
+}
+## ---- End of the function
+
+## Load NMF results and combine them
+resRank2 <- readRDS("NMF_rank_2.RDS")
+resRank3 <- readRDS("NMF_rank_3.RDS")
+resRank4 <- readRDS("NMF_rank_4.RDS")
+
+nmfRes <- combineNMFObj(list(`2` = resRank2, `3` = resRank3, `4` = resRank4))
+saveRDS(nmfRes, "NMF_outputs.RDS")
+```
+
+## 1. Quick start
+The following set of code is to run SOTK with the Nanostring GeoMx DSP data in mouse brains where GeoMx DSP profiled two segments in the retrosplenial cortex: parvalbumin interneurons (PV+) and neurons (NeuN+). Here, we used the PV segment to reproduce the SOTK results below. Or, you can visit [SOTK-ShinyApps](https://shinyapps.ucalgary.ca/SOTK) with GUI (graphical user interface) to reanalyze the GeoMx data.
+
+### Load the package and parameter settings
+```{r preparation}
+library(SOTK)
+
+## Load the NMF object
+pvNmfObj <- readRDS("../inst/testdata/PV.RDS")
+
+## Parameter settings
+dataL <- list(PV = pvNmfObj)
+rankL <- list(PV = c(2:6))
+dataColor <- c("PV" = "#7570B3")
+corMethod <- "spearman"
+
+corrCoefThrehold <- 0.5
+seed <- 1118
+iteration <- 1000
+communityWeight <- 100 # for visualization
+cohortWeight <- 1 # tweak for multiple cohorts
+
+nodeSize <- 10
+nodeLabelSize <- 2
+
+modelCols <- c(
+        "TG1F" = "#084594",
+        "TG2F" = "#2171B5",
+        "TG3F" = "#4292C6",
+        "TG4F" = "#6BAED6",
+        "WT1F" = "#99000D",
+        "WT2F" = "#CB181D",
+        "WT3F" = "#EF3B2C"
+)
+
+```
+
+### Concat W matrics and calculate pairwise correlations
+```{r input_correlationMatrix}
+soSet <- SOSet(NMFobjL = dataL, NMFrankL = rankL, dataCol = dataColor, corMet = corMethod)
+plotCorrDensity(soSet, filename = "../inst/testdata/01_Stats_correlation_density.pdf", width = 6, height = 6)
+```
+
+### Generate a correlation network and apply community search
+```{r run_sotk}
+soObj <- SOTK(soSet, coefThre = corrCoefThrehold, seed = seed, niter = iteration, commWeight = communityWeight, cohortWeight = cohortWeight)
+```
+
+### Visualization
+```{r network_visualization}
+par(mfrow=c(1,1))
+plotNetwork(soObj, annot = "cohort", edgeAlpha = 0.8, weighted = FALSE, filename = "../inst/testdata/02_Network_Unweighted.pdf", vertexSize = nodeSize, vertexLabelCex = nodeLabelSize)
+plotNetwork(soObj, label = TRUE, annot = "cohort", edgeAlpha = 0.8, weighted = FALSE, filename = "../inst/testdata/03_Network_Unweighted_lbl.pdf", vertexSize = nodeSize, vertexLabelCex = nodeLabelSize) 
+plotNetwork(soObj, annot = "community", edgeAlpha = 0.8, weighted = FALSE, filename = "../inst/testdata/04_Network_Unweighted_Comm.pdf", vertexSize = nodeSize, vertexLabelCex = nodeLabelSize)
+plotNetwork(soObj, label = TRUE, annot = "community", edgeAlpha = 0.8, weighted = FALSE, filename = "../inst/testdata/05_Network_Unweighted_Comm_lbl.pdf", vertexSize = nodeSize, vertexLabelCex = nodeLabelSize)
+plotNetwork(soObj, annot = "community", edgeAlpha = 0.8, weighted = TRUE, filename = "../inst/testdata/06_Network_Community.pdf", vertexSize = nodeSize, vertexLabelCex = nodeLabelSize)
+plotNetwork(soObj, label = TRUE, annot = "community", edgeAlpha = 0.8, weighted = TRUE, filename = "../inst/testdata/07_Network_Community_lbl.pdf", vertexSize = nodeSize, vertexLabelCex = nodeLabelSize)
+plotNetwork(soObj, annot = "cohort", edgeAlpha = 0.8, weighted = TRUE, filename = "../inst/testdata/08_Network_Weighted.pdf", vertexSize = nodeSize, vertexLabelCex = nodeLabelSize)
+plotNetwork(soObj, label = TRUE, annot = "cohort", edgeAlpha = 0.8, weighted = TRUE, filename = "../inst/testdata/09_Network_Weighted_lbl.pdf", vertexSize = nodeSize, vertexLabelCex = nodeLabelSize)
+```
+
+### Sample annotation on the correlation network
+```{r sample_annotation}
+.getModelStats <- function(x) {
+        TG1F <- 0; TG2F <- 0; TG3F <- 0; TG4F <- 0; 
+        WT1F <- 0; WT2F <- 0; WT3F <- 0
+
+        if (!is.null(x)) {
+                for (i in x) {
+                        buff <- unlist(stringr::str_split(i, "-"))
+                        if (buff[1] == "TG1F") {
+                                TG1F <- TG1F + 1
+                        } else if (buff[1] == "TG2F") {
+                                TG2F <- TG2F + 1
+                        } else if (buff[1] == "TG3F") {
+                                TG3F <- TG3F + 1
+                        } else if (buff[1] == "TG4F") {
+                                TG4F <- TG4F + 1
+                        } else if (buff[1] == "WT1F") {
+                                WT1F <- WT1F + 1
+                        } else if (buff[1] == "WT2F") {
+                                WT2F <- WT2F + 1
+                        } else if (buff[1] == "WT3F") {
+                                WT3F <- WT3F + 1
+                        } else {
+                                message(paste0("WARNING::", buff[1], " is uncategorized."))
+                        }
+                }
+        }
+        return(c(TG1F, TG2F, TG3F, TG4F,
+                WT1F, WT2F, WT3F))
+}
+
+sample <- "TG4F"
+graph <- soObj@corNetwork
+layout <- soObj@unweightedLay # or @weightedLay
+nodes <- igraph::V(graph)$name
+clusterInfo <- soObj@sample2metagene
+
+# Initialization
+vertexPie <- as.list(rep(1, length(nodes))); names(vertexPie) <- nodes
+vertexPieCol <- as.list(rep("white", length(nodes))); names(vertexPieCol) <- nodes
+vertexSize <- rep(0, length(nodes)); names(vertexSize) <- nodes
+
+for (ndx in seq_along(nodes)) {
+        node <- nodes[ndx]
+        samples <- clusterInfo[["PV"]][[node]]
+        sdx <- which(sapply(stringr::str_split(samples, "-"), "[[", 1) == sample)
+
+        if (length(samples) > 0 && length(sdx) > 0) {
+                vertexSize[[node]] <- 5
+                vertexPie[[node]] <- .getModelStats(unique(samples[sdx]))
+                vertexPieCol[[node]] <- modelCols
+        }
+}
+
+pdf(paste0("../inst/testdata/10_Model_Annotation_", sample, ".pdf"), width=10, height=10)
+plot(graph,
+        layout = layout,
+        vertex.label = NA,
+        vertex.size = as.numeric(vertexSize),
+        vertex.shape = "pie",
+        vertex.pie = vertexPie,
+        vertex.pie.color = vertexPieCol,
+        edge.color = scales::alpha("grey80", 0.3)
+)
+title(main = sample)
+dev.off()
+```
+
+### Check the metagene coverage at each rank
+```{r select_rank}
+colComm <- soObj@commCols
+ranks <- sort(as.numeric(unique(sapply(stringr::str_split(nodes, "\\$"), "[[", 3))))
+
+pdf("../inst/testdata/11_coverage.pdf", width = 10, height = 10)
+for (rank in ranks) {
+        vertexLabel <- paste(
+                sapply(stringr::str_split(nodes, "\\$"), "[[", 2),
+                sapply(stringr::str_split(nodes, "\\$"), "[[", 3),
+                sep = "/"
+        )
+        vertexLabel[which(as.numeric(sapply(stringr::str_split(nodes, "\\$"), "[[", 3)) != rank)] <- ""
+
+        vertexColor <- colComm[igraph::V(graph)$community]
+        liveCols <- unique(vertexColor[which(as.numeric(sapply(stringr::str_split(nodes, "\\$"), "[[", 3)) == rank)])
+        if (length(liveCols) > 0) {
+                vertexColor[-which(vertexColor %in% liveCols)] <- "white"
+        }
+        vertexColor[which(vertexLabel != "")] <- "black"
+        liveColNode <- length(which(vertexColor == "black"))
+
+        plot(graph,
+                layout = layout,
+                vertex.label = vertexLabel,
+                vertex.color = vertexColor,
+                vertex.label.color = "white",
+                vertex.size = 8,
+                vertex.label.cex = 0.75,
+                edge.color = "grey80"
+        )
+        title(paste0("Rank = ", rank), cex.main = 2, col.main = "black")
+        legend("bottomleft",
+                legend = c(
+                        paste0(liveColNode, " metagenes"),
+                        paste0(length(colComm), " communities"),
+                        paste0("Ratio = ", round(length(colComm) / liveColNode, 2))
+                ),
+                bty = "n"
+        )
+}
+dev.off()
+```

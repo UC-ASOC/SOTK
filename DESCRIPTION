@@ -1,0 +1,30 @@
+Package: SOTK
+Title: SOTK: Spatial Omics Toolkit
+Version: 0.1.0
+Authors: Heewon Seo 
+Maintainer: Heewon Seo <Heewon.Seo@UCalgary.ca>
+Description: The Spatial Omics Toolkit (SOTK) is an R package containing a comprehensive set of functions to identify biological modules from spatial transcriptomics profiles. Multiple profiles across different cohorts or platforms can be analyzed by constructing a correlation network with the deconvoluted outputs using the community search algorithm as an integrative method. Additionally, SOTK allows users to select the optimal rank (latent factor) from multiple NMF runs in a data-driven way by identifying the minimum rank that encompasses the majority, if not all, of the communities grouped by community search algorithms. It was initially developed to analyze Nanostring GeoMx Digital Spatial Profiler (DSP) data, and SOTK is particularly well-suited for cases where multiple segments (e.g., cell types) are independently profiled from the same tissue samples, allowing for the incorporation of numerous segment profiles per sample/patient.
+License: `use_mit_license()`
+Encoding: UTF-8
+LazyData: true
+Imports:
+	methods,
+	corrr,
+	NMF,
+	igraph,
+	stringr,
+	RColorBrewer,
+	grid
+Depends: R (>= 4.3.0)
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
+Suggests:
+	knitr,
+	rmarkdown
+VignetteBuilder: knitr
+Collate: 
+    'class-SOSet.R'
+    'class-SOTK.R'
+    'prototypes.R'
+    'utils.R'
+    'visualization.R'

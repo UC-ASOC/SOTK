@@ -1,0 +1,11 @@
+**/.DS_Store
+.DS_Store
+.ipynb_checkpoints
+*.code-workspace
+.vscode
+inst/testdata/*.pdf
+vignettes/*.html
+vignettes/*.R
+vignettes/*.pdf
+/doc/
+/Meta/
